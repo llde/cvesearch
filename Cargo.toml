@@ -1,0 +1,15 @@
+[package]
+name = "cve-search"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { package = "clap-v3", version = "3.0.0-beta.1" }
+executor_future = { git = "https://github.com/llde/executor_future", version = "0.1" }
+walkdir = "2.3"
+url = "2.2"
+ureq = { git = "https://github.com/llde/ureq" , version = "2.3.1", features = ["json"] }
+roctogen = {git = "https://github.com/llde/roctogen" , version = "0.11", features = ["ureq"]}
+cvesearch = {path = "../cve-search", version = "0.2"}
