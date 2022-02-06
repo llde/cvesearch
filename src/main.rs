@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use cvesearch::CVESearch;
 use std::fs::File;
 use std::io;
-use std::io::Read;
+use std::io::{Read,Write};
 use url::Url;
 use walkdir::WalkDir;
 use std::fs::DirBuilder;
@@ -188,7 +188,8 @@ impl Promise for FutureWriter{
             };
             let mut cont = resp.into_string().unwrap();
             path.push(url.path_segments().unwrap().rev().next().unwrap());
-            File::create(&path).unwrap();
+            let mut f = File::create(&path).unwrap();
+            f.write_all(&cont.into_bytes());
             path.pop();
   //         println!("{}", cont);
         }
@@ -212,7 +213,8 @@ impl Promise for FutureWriter{
             };
             let mut cont = resp.into_string().unwrap();
             path.push(url.path_segments().unwrap().rev().next().unwrap());
-            File::create(&path).unwrap();
+            let mut f = File::create(&path).unwrap();
+            f.write_all(&cont.into_bytes());
   //         println!("{}", cont);
             path.pop();
         }
