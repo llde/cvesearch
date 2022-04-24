@@ -13,3 +13,4 @@ url = "2.2"
 ureq = { git = "https://github.com/llde/ureq" , version = "2.3.1", features = ["json"] }
 roctogen = {git = "https://github.com/llde/roctogen" , version = "0.11", features = ["ureq"]}
 cvesearch = {git = "https://github.com/llde/cve-search", version = "0.2"}
+csv = "1.1"

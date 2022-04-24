@@ -1,5 +1,7 @@
 extern crate cvesearch;
 extern crate executor_future;
+extern crate csv;
+
 use clap::Clap;
 use executor_future::{Promise, OperationalPromise, PollResult, ThreadPoolExecutor};
 
@@ -18,6 +20,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use roctogen::api::repos;
 use roctogen::auth::Auth;
 use roctogen::endpoints::repos::{ReposGetCommitError, ReposGetCommitParams};
+
+use csv::StringRecord;
 
 #[derive(Clap)]
 #[clap(version = "1.0", author = "llde")]
@@ -96,7 +100,7 @@ impl Promise for FutureGithub{
                                     file_changed
                                         .into_iter()
                                         .filter_map(|x| {
-                                            let raw = x.raw_url.unwrap();
+                                            let mut raw = x.raw_url.unwrap().replace("%2F", "/"); //Some repo return broken file paths.
                                             for i in self.data.4.iter(){
                                                 if raw.ends_with(i) {return Some(raw);}
                                             }
@@ -232,6 +236,10 @@ fn main() -> Result<(), io::Error> {
     let cve = CVESearch::new(opts.threads);
     let mut walker = WalkDir::new(opts.input).into_iter();
     walker.next();
+    DirBuilder::new().recursive(true).create(&opts.output).unwrap();
+    let mut path_classifier = PathBuf::from(&opts.output);
+    path_classifier.push("attributes.csv");
+    let mut class_file = csv::Writer::from_path(&path_classifier)?;
     let mut count = 0;
     let mut tot = 0;
     let mut invalid = 0;
@@ -296,8 +304,7 @@ fn main() -> Result<(), io::Error> {
             cve.get_cve(cve_s.into()),
             files,
         ));
-        //       if i > 5 {break;}  //TODO test remove
-        //        i = i+ 1;
+        if tot > 5 {break;}  //TODO test remove
     }
     let mut lenght = hold.len();
     let mut retry = Vec::new();
@@ -312,6 +319,11 @@ fn main() -> Result<(), io::Error> {
                 if let Ok(vul) = vulres {
                     let vul_obj = vul.as_object().unwrap();
                     let as_arr = vul_obj.get("references").unwrap().as_array().unwrap();
+                    let mut cwe = vul_obj.get("cwe");
+                    if let Option::Some(cwei) = cwe {
+                        let  record = StringRecord::from(vec![f.0.to_string(), cwei.to_string()]);
+                        class_file.write_record(&record);
+                    }
                     for url in as_arr {
                         let enc = Url::parse(url.as_str().unwrap()).unwrap();
                         if enc.host_str() == Some("github.com") {
