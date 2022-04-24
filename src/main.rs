@@ -304,7 +304,7 @@ fn main() -> Result<(), io::Error> {
             cve.get_cve(cve_s.into()),
             files,
         ));
-        if tot > 5 {break;}  //TODO test remove
+     //   if tot > 5 {break;}  //TODO test remove
     }
     let mut lenght = hold.len();
     let mut retry = Vec::new();
