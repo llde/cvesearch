@@ -1,7 +1,9 @@
+#![feature(label_break_value)]
+
 extern crate cvesearch;
 extern crate executor_future;
 extern crate csv;
-
+extern crate patch;
 use clap::Clap;
 use executor_future::{Promise, OperationalPromise, PollResult, ThreadPoolExecutor};
 
@@ -22,6 +24,7 @@ use roctogen::auth::Auth;
 use roctogen::endpoints::repos::{ReposGetCommitError, ReposGetCommitParams};
 
 use csv::StringRecord;
+use patch::{Patch, ParseErrorOut, ParseError, Line};
 
 #[derive(Clap)]
 #[clap(version = "1.0", author = "llde")]
@@ -226,6 +229,115 @@ impl Promise for FutureWriter{
         self.compl.store(true, Ordering::SeqCst);
     }
 }
+//to pass and get thje comment mode from the function
+#[derive(PartialEq,Debug)]
+enum CommentMode {
+    CommentModeOn,
+    CommentModeOff,
+}
+//TODO declspec/attribute handling
+/*
+    A function is compoesd of a type, an identifier and a lst for agrs (type + id).
+    The type can be preceed or followed by some specifiier (a macro, static, an attribute (__declspec  or __attribute__) )
+*/
+
+fn check_function_declaration<'a>(line : &'a str, prev_mode : CommentMode) -> (Option<&'a str>, CommentMode, bool ){
+    let line = line.trim();
+    let splitted = line.split_whitespace();
+    let mut tokens = 0;
+    let mut mismatch_comment = false;
+    let mut prev_str = line;
+    let mut comment_mode = prev_mode;
+    let mut ignore_rest = false;
+    let mut multiline_comment = false;
+    let name = 'ret_for: {
+        for mut split in splitted{
+            if split.is_empty() {continue;}
+            split = split.trim();
+  //          println!("{:?}", split);
+
+            if comment_mode == CommentMode::CommentModeOn {
+                if split.ends_with("*/"){
+                    comment_mode = CommentMode::CommentModeOff;
+                    continue;
+                }
+                else if split.contains("*/") {
+                    split = split.split("*/").collect::<Vec<&str>>()[1];
+                    comment_mode = CommentMode::CommentModeOff;
+                }
+                else if split.ends_with("\""){
+                    comment_mode = CommentMode::CommentModeOff;
+                    continue;
+                }
+                else if split.contains("\"") {
+                    split = split.split("\"").collect::<Vec<&str>>()[0];
+                    comment_mode = CommentMode::CommentModeOff;
+                }
+                else {
+                    continue;  //Skip the rest of the processing when in comment mode
+                }
+            }
+            else {
+                if split.ends_with("*/"){
+                    comment_mode = CommentMode::CommentModeOff;
+                    mismatch_comment = true;
+                    continue;
+                }
+                else if split.contains("*/") {
+                    mismatch_comment = true;
+                    split = split.split("*/").collect::<Vec<&str>>()[1];
+                    comment_mode = CommentMode::CommentModeOff;
+                }            
+            }
+            if split.contains("//") && !split.starts_with("//") {
+                split = split.split("//").collect::<Vec<&str>>()[0];
+                ignore_rest = true; //the token start a single line comment, ignore the rest of the line after processing this part
+            }
+            if split.starts_with("/*"){
+                comment_mode = CommentMode::CommentModeOn;
+                continue;
+            }
+            if split.contains("/*") {
+                split = split.split("/*").collect::<Vec<&str>>()[0];
+                comment_mode = CommentMode::CommentModeOn;
+            }
+            if split.starts_with("\""){
+                comment_mode = CommentMode::CommentModeOn;
+                continue;
+            }
+            if split.contains("\"") {
+                split = split.split("\"").collect::<Vec<&str>>()[0];
+                comment_mode = CommentMode::CommentModeOn;
+            }
+         //   if split.starts_with
+            if split.contains("=") || split.starts_with("//") || split.contains("{") || split.contains("}") || split.contains("<") || split.contains(">") || split.contains("!") || split.contains(","){
+                break 'ret_for None; //Can't be a valid line for function definition
+            }
+            if split == "return" || split == "extern" ||  split.contains("#") || split == "asm"  ||  split == "_asm" || split == "__asm" || split == ":" || split == "if" || split == "else" || split == "case" {
+                break 'ret_for None; //Can't be a valid line for function definition
+            }
+            if (split.contains("(") || split.starts_with("*") ) && tokens == 0 {
+                break 'ret_for None; // ( can't be in the first token in the line. it would be a call in the form  name_func(...).
+            }
+            if split.contains("(") && tokens == 1 && split.starts_with("(") {
+                break 'ret_for None; // ( would be the form nome_func (...)
+            }
+            if split.contains("(") && tokens >= 1 && !split.starts_with("(") && !split.ends_with(";"){
+                break 'ret_for Some(split.split("(").collect::<Vec<&str>>()[0].trim_start_matches("*"));
+            }
+            if split.contains("(") && tokens >= 1 && split.starts_with("(") && !split.ends_with(";"){
+                break 'ret_for Some(prev_str.trim_start_matches("*"));
+            }
+            if ignore_rest {break 'ret_for None}
+            tokens += 1;
+            prev_str = split;
+        }
+        None
+    };
+//    println!("{:?} {:?}",name, comment_mode);
+    (name, comment_mode, mismatch_comment)
+}
+
 
 fn main() -> Result<(), io::Error> {
     let opts: Opts = Opts::parse();
@@ -240,54 +352,105 @@ fn main() -> Result<(), io::Error> {
     let mut path_classifier = PathBuf::from(&opts.output);
     path_classifier.push("attributes.csv");
     let mut class_file = csv::Writer::from_path(&path_classifier)?;
-    let mut count = 0;
     let mut tot = 0;
     let mut invalid = 0;
-    let mut nonc = 0;
-    let mut fail = 0;
-    let mut hold = Vec::new();
+    let mut nonsingle = 0;
+    let mut holders = Vec::new();
     for entry in walker {
         tot += 1;
         let entry = entry.unwrap();
         let mut file = File::open(entry.path())?;
-        let mut contents = String::new();
-        if file.read_to_string(&mut contents).is_err() {
-            invalid += 1; //Patch has non UTF8 chars
+        let mut interm = Vec::new();
+        if file.read_to_end(&mut interm).is_err() {
+            println!("{:?}", entry.path());
+            invalid += 1;
             continue;
         }
-        let mut inv = true;
-        let mut files= Vec::new();
-        for line in contents.lines() {
-            if let Some(stripped) = line.strip_prefix("--- "){
-                if stripped == "/dev/null" {
-                        nonc += 1; //File did not exist, don't consider this patch for now
-                        inv = true;
-                        break;
-                }
-            }
-            if let Some(stripped) = line.strip_prefix("+++ ") {
-                inv = false;
-                if let Some((_, ext)) = stripped.rsplit_once('.') {
-                    if ext != "c" && ext != "h" {
-                        nonc += 1; //Patch has not only c and h file modification
-                        inv = true;
-                        break;
+        let mut contents = String::from_utf8_lossy(&interm).to_owned();
+        let patches = Patch::from_single(&contents);
+        match patches {
+            Ok(patch) => {
+                let mut names = Vec::new();
+                for hunk in patch.hunks {
+                    let mut comm_mode = CommentMode::CommentModeOff;
+                    let mut name = None;
+                    let mut found_name = false;
+                    let mut name_used = false;
+                    for line in hunk.lines {
+                    // The context function in the range context data may refers to a previous function and not the function the modifications are made.
+             //           println!("{:?}", line);
+             //check for the declaration to be before the first edit in the chunk
+                        let  tok :  (Option<&str>, CommentMode, bool) = match line {
+                            Line::Add(line) => {
+                                name_used = true;
+                                //check_function_declaration(line, comm_mode);
+                                (None, comm_mode, false)
+                            },
+                            Line::Remove(line) => {
+                                name_used = true;
+                                let (_,comm_mode, mismatch) = check_function_declaration(line, comm_mode);
+                                (None, comm_mode, mismatch)// this may be useful instead
+                            },
+                            Line::Context(line) => {
+                                check_function_declaration(line, comm_mode)
+                            },
+                        };
+                        if tok.2 {
+                            name = None;
+                        }
+                        comm_mode = tok.1;
+                        match tok.0 {
+                            Some(func) =>{
+                                name_used = false;
+                                name = Some(func);
+                            },
+                            None => {},
+                        }
+                    }
+                    if name_used && name.is_some(){  //if not used use the context function
+                        names.push(name.unwrap().to_owned());
+                    }
+                    else {
+                        let hunk_t = hunk.range_text.clone();
+                        let cont_name = check_function_declaration(&hunk_t,CommentMode::CommentModeOff).0;
+                        if let Some(name) = cont_name {
+                            let own = name.to_owned();
+                            if !names.contains(&own){
+                                names.push(own);
+                            }
+                        }
                     }
                 }
-                else { //TODO extensionless file can be readme/changelogs etc
-                    nonc += 1; //Patch has not only c a nd h file modification
-                    inv = true;
-                    break;
+                if names.is_empty() {
+      //              println!("{:?}", entry.path());
                 }
-                println!("{:#?} {}",entry.file_name(),stripped);
-
-                files.push(stripped.strip_prefix("b/").unwrap().to_owned());
+                else if names.len() == 1 {
+                    holders.push((entry.clone(), names[0].clone(), vec![patch.old.path.strip_prefix("a/").unwrap().to_owned()]));
+                }
+                else{
+                }
+             //    break;
+            //COSE
+            },
+            Err(err) => {
+                match err {
+                    ParseErrorOut::NoSinglePatch(_) => {
+//                        println!("{}", entry.path().display());
+                        nonsingle += 1;
+                    },
+                    ParseErrorOut::InnerError(err) => {
+                        invalid +=1;
+//                        println!("{:?}", entry.path());
+//                        println!("{}", err);
+                    }
+                }
             }
         }
-        if inv {
-            continue;
-        }
-        let firssplit = entry
+    }
+    println!("{}  {}  {} {}", tot, holders.len(), nonsingle, invalid);
+    let mut hold = Vec::new();
+    for data in holders {
+        let firssplit = data.0
             .file_name()
             .to_str()
             .unwrap()
@@ -302,10 +465,13 @@ fn main() -> Result<(), io::Error> {
             cve_s.to_owned(),
             commit.to_owned(),
             cve.get_cve(cve_s.into()),
-            files,
+            data.2,
+            data.1,
         ));
      //   if tot > 5 {break;}  //TODO test remove
     }
+    let mut count = 0;
+    let mut fail = 0;
     let mut lenght = hold.len();
     let mut retry = Vec::new();
     let mut repo_comm = Vec::new();
@@ -321,7 +487,7 @@ fn main() -> Result<(), io::Error> {
                     let as_arr = vul_obj.get("references").unwrap().as_array().unwrap();
                     let mut cwe = vul_obj.get("cwe");
                     if let Option::Some(cwei) = cwe {
-                        let  record = StringRecord::from(vec![f.0.to_string(), cwei.to_string()]);
+                        let  record = StringRecord::from(vec![f.0.to_string(), cwei.to_string(), f.4.clone()]);
                         class_file.write_record(&record);
                     }
                     for url in as_arr {
@@ -353,16 +519,16 @@ fn main() -> Result<(), io::Error> {
             }
         }
         for i in retry.drain(..) {
-            hold.push((i.0.clone(), i.1, cve.get_cve(i.0), i.3.clone()));
+            hold.push((i.0.clone(), i.1, cve.get_cve(i.0), i.3.clone(), i.4.clone()));
         }
         lenght = hold.len();
     }
     println!(
-        "Result : {} / {} / {} / {} / {}",
-        count, fail, invalid, nonc, tot
+        "Result : {} / {} / {} / {}",
+        count, fail, invalid  + nonsingle, tot
     );
 
-
+    class_file.flush();
     let executor : ThreadPoolExecutor<FutureGithub> = ThreadPoolExecutor::new(opts.threads);
     let mut github_cve_files_fut : Vec<FutureGithub> = Vec::new(); //(CVE, commit, filechanged, parent) in a future
     for i in repo_comm.iter() {

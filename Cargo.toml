@@ -7,10 +7,11 @@ edition = "2021"
 
 [dependencies]
 clap = { package = "clap-v3", version = "3.0.0-beta.1" }
-executor_future = { git = "https://github.com/llde/executor_future", version = "0.1" }
+executor_future = { git = "https://github.com/llde/executor_future" }
 walkdir = "2.3"
 url = "2.2"
-ureq = { git = "https://github.com/llde/ureq" , version = "2.3.1", features = ["json"] }
-roctogen = {git = "https://github.com/llde/roctogen" , version = "0.11", features = ["ureq"]}
-cvesearch = {git = "https://github.com/llde/cve-search", version = "0.2"}
+ureq = { git = "https://github.com/llde/ureq", features = ["json"] }
+roctogen = {git = "https://github.com/llde/roctogen", features = ["ureq"]}
+cvesearch = {git = "https://github.com/llde/cve-search"}
 csv = "1.1"
+patch = {git = "https://github.com/llde/patch-rs"}
