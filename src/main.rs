@@ -424,7 +424,7 @@ fn main() -> Result<(), io::Error> {
                 if names.is_empty() {
       //              println!("{:?}", entry.path());
                 }
-                else if names.len() == 1 {
+                else if names.len() == 1 {                    
                     holders.push((entry.clone(), names[0].clone(), vec![patch.old.path.strip_prefix("a/").unwrap().to_owned()]));
                 }
                 else{
@@ -475,6 +475,7 @@ fn main() -> Result<(), io::Error> {
     let mut lenght = hold.len();
     let mut retry = Vec::new();
     let mut repo_comm = Vec::new();
+    let mut cves : Vec<String> = Vec::new();
     while lenght > 0 {
         let mut index = 0;
         //       println!("New Cycle, lenght {}", lenght);
@@ -500,8 +501,17 @@ fn main() -> Result<(), io::Error> {
                                 url_iter.next(); // commit fragment
                                 let repo = url_iter.next().unwrap().to_owned();
                                 let user_org = url_iter.next().unwrap().to_owned();
+                                let mut idx = 0;
+                                for cve in &cves{
+                                    if cve.starts_with(&f.0){idx += 1;}
+                                }
+                                let r_cve = if idx != 0{
+                                    format!("{}-{}", f.0, idx)
+                                }
+                                else { f.0.clone() };
                                 println!("{} {} {} {}", f.0, user_org, repo, last_element);
-                                repo_comm.push((f.0.clone(), user_org, repo, f.1.clone(), f.3.clone()));
+                                repo_comm.push((r_cve, user_org, repo, f.1.clone(), f.3.clone()));
+                                cves.push(f.0.clone());
                                 break;
                             }
                         }
