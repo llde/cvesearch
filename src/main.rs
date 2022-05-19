@@ -23,7 +23,7 @@ use roctogen::api::repos;
 use roctogen::auth::Auth;
 use roctogen::endpoints::repos::{ReposGetCommitError, ReposGetCommitParams};
 
-use csv::StringRecord;
+use csv::{WriterBuilder,StringRecord};
 use patch::{Patch, ParseErrorOut, ParseError, Line};
 
 #[derive(Clap)]
@@ -351,7 +351,7 @@ fn main() -> Result<(), io::Error> {
     DirBuilder::new().recursive(true).create(&opts.output).unwrap();
     let mut path_classifier = PathBuf::from(&opts.output);
     path_classifier.push("attributes.csv");
-    let mut class_file = csv::Writer::from_path(&path_classifier)?;
+    let mut class_file = WriterBuilder::new().has_headers(false).from_path(&path_classifier)?;
     let mut tot = 0;
     let mut invalid = 0;
     let mut nonsingle = 0;
@@ -486,14 +486,11 @@ fn main() -> Result<(), io::Error> {
                 if let Ok(vul) = vulres {
                     let vul_obj = vul.as_object().unwrap();
                     let as_arr = vul_obj.get("references").unwrap().as_array().unwrap();
-                    let mut cwe = vul_obj.get("cwe");
-                    if let Option::Some(cwei) = cwe {
-                        let  record = StringRecord::from(vec![f.0.to_string(), cwei.to_string(), f.4.clone()]);
-                        class_file.write_record(&record);
-                    }
                     for url in as_arr {
                         let enc = Url::parse(url.as_str().unwrap()).unwrap();
                         if enc.host_str() == Some("github.com") {
+                            let mut cwe = vul_obj.get("cwe");
+
                             let mut url_iter = enc.path_segments().unwrap().rev();
                             let last_element = url_iter.next().unwrap();
                             if last_element == f.1 {
@@ -509,7 +506,11 @@ fn main() -> Result<(), io::Error> {
                                     format!("{}-{}", f.0, idx)
                                 }
                                 else { f.0.clone() };
-                                println!("{} {} {} {}", f.0, user_org, repo, last_element);
+                                println!("{} {} {} {}", r_cve , user_org, repo, last_element);
+                                if let Option::Some(cwei) = cwe {
+                                    let  record = StringRecord::from(vec![r_cve.to_string(), cwei.to_string(), f.4.clone()]);
+                                    class_file.write_record(&record);
+                                }
                                 repo_comm.push((r_cve, user_org, repo, f.1.clone(), f.3.clone()));
                                 cves.push(f.0.clone());
                                 break;
